@@ -3,9 +3,9 @@ import yfinance as yf
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
-st.set_page_config(page_title="Bot IA Trading", layout="wide")
+st.set_page_config(page_title="Bot IA PRO", layout="wide")
 
-st.title("🧠 Bot Trading IA (Oro XAUUSD)")
+st.title("🧠 Bot Trading IA PRO (Oro XAUUSD)")
 
 SYMBOL = "GC=F"
 
@@ -13,7 +13,7 @@ SYMBOL = "GC=F"
 data = yf.download(SYMBOL, period="5d", interval="5m")
 
 if data.empty:
-    st.error("Error cargando datos")
+    st.error("❌ Error cargando datos")
     st.stop()
 
 # --- FEATURES ---
@@ -27,15 +27,12 @@ rs = gain / loss
 data["RSI"] = 100 - (100 / (1 + rs))
 
 data["ATR"] = (data["High"] - data["Low"]).rolling(14).mean()
-
-# Momentum
 data["Momentum"] = data["Close"].diff()
 
 # --- TARGET (futuro) ---
 data["Future"] = data["Close"].shift(-3)
 data["Target"] = (data["Future"] > data["Close"]).astype(int)
 
-# Limpiar
 data = data.dropna()
 
 # --- ENTRENAMIENTO IA ---
@@ -51,32 +48,47 @@ model.fit(X, y)
 last = data.iloc[-1]
 X_last = last[features].values.reshape(1, -1)
 
-prediction = model.predict(X_last)[0]
+proba = model.predict_proba(X_last)[0]
 
-# --- FILTRO IA ---
+prob_sell = proba[0]
+prob_buy = proba[1]
+
+confidence = max(prob_buy, prob_sell)
+
 signal = "NO TRADE"
 
-if prediction == 1:
+if prob_buy > 0.6:
     signal = "BUY"
-elif prediction == 0:
+elif prob_sell > 0.6:
     signal = "SELL"
+
+# Filtro extra
+if confidence < 0.6:
+    signal = "NO TRADE"
 
 # --- DATOS ---
 price = float(last["Close"])
-
-# SL / TP
 atr = float(last["ATR"])
+
+# --- SL / TP ---
+sl = None
+tp = None
 
 if signal == "BUY":
     sl = price - atr * 2
     tp = price + atr * 3
+
 elif signal == "SELL":
     sl = price + atr * 2
     tp = price - atr * 3
-else:
-    sl, tp = None, None
 
 # --- UI ---
+col1, col2, col3 = st.columns(3)
+
+col1.metric("💰 Precio", round(price, 2))
+col2.metric("📊 ATR", round(atr, 2))
+col3.metric("🧠 Confianza", round(confidence, 2))
+
 st.subheader("📍 Señal IA")
 
 if signal == "BUY":
@@ -86,9 +98,19 @@ elif signal == "SELL":
 else:
     st.warning("⚪ IA: NO OPERAR")
 
-st.write(f"Precio: {price}")
-st.write(f"Stop Loss: {sl}")
-st.write(f"Take Profit: {tp}")
+st.subheader("🧠 Probabilidades")
+
+st.write(f"Probabilidad BUY: {round(prob_buy,2)}")
+st.write(f"Probabilidad SELL: {round(prob_sell,2)}")
+
+st.subheader("🎯 Gestión de riesgo")
+
+st.write(f"Stop Loss: {round(sl,2) if sl else None}")
+st.write(f"Take Profit: {round(tp,2) if tp else None}")
 
 st.subheader("📊 Gráfico")
+
 st.line_chart(data[["Close", "EMA20", "EMA50"]])
+
+with st.expander("📋 Ver datos"):
+    st.dataframe(data.tail(20))
