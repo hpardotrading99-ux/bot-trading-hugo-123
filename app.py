@@ -1,229 +1,94 @@
 import streamlit as st
-import pandas as pd
 import yfinance as yf
-import plotly.graph_objects as go
-import requests
-from streamlit_autorefresh import st_autorefresh
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
 
-# =========================
-# CONFIG
-# =========================
-st.set_page_config(layout="wide")
-st.title("🤖 Bot Trading PRO - MODO AGRESIVO")
+st.set_page_config(page_title="Bot IA Trading", layout="wide")
 
-st_autorefresh(interval=3000, key="refresh")
+st.title("🧠 Bot Trading IA (Oro XAUUSD)")
 
-# =========================
-# TELEGRAM
-# =========================
-TELEGRAM_TOKEN = "8733507632:AAF5NKhoL4gVm_Fjlg50LgS7bKM4cGhKoGw"
-TELEGRAM_CHAT_ID = "867927346"
+SYMBOL = "GC=F"
 
-last_update_id = None
+# --- DATOS ---
+data = yf.download(SYMBOL, period="5d", interval="5m")
 
-def get_telegram_updates():
-    global last_update_id
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    response = requests.get(url).json()
+if data.empty:
+    st.error("Error cargando datos")
+    st.stop()
 
-    if not response["result"]:
-        return None
+# --- FEATURES ---
+data["EMA20"] = data["Close"].ewm(span=20).mean()
+data["EMA50"] = data["Close"].ewm(span=50).mean()
 
-    last = response["result"][-1]
+delta = data["Close"].diff()
+gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+rs = gain / loss
+data["RSI"] = 100 - (100 / (1 + rs))
 
-    if last_update_id == last["update_id"]:
-        return None
+data["ATR"] = (data["High"] - data["Low"]).rolling(14).mean()
 
-    last_update_id = last["update_id"]
+# Momentum
+data["Momentum"] = data["Close"].diff()
 
-    return last["message"]["text"]
+# --- TARGET (futuro) ---
+data["Future"] = data["Close"].shift(-3)
+data["Target"] = (data["Future"] > data["Close"]).astype(int)
 
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, data={
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": msg
-    })
+# Limpiar
+data = data.dropna()
 
-# =========================
-# SESSION STATE
-# =========================
-if "bot_active" not in st.session_state:
-    st.session_state.bot_active = True
+# --- ENTRENAMIENTO IA ---
+features = ["EMA20", "EMA50", "RSI", "ATR", "Momentum"]
 
-if "position" not in st.session_state:
-    st.session_state.position = None
+X = data[features]
+y = data["Target"]
 
-if "trades" not in st.session_state:
-    st.session_state.trades = []
+model = RandomForestClassifier(n_estimators=50)
+model.fit(X, y)
 
-if "balance" not in st.session_state:
-    st.session_state.balance = 150  # 👈 capital inicial agresivo
+# --- PREDICCIÓN ---
+last = data.iloc[-1]
+X_last = last[features].values.reshape(1, -1)
 
-if "equity" not in st.session_state:
-    st.session_state.equity = [150]
+prediction = model.predict(X_last)[0]
 
-# =========================
-# CONTROL TELEGRAM
-# =========================
-cmd = get_telegram_updates()
+# --- FILTRO IA ---
+signal = "NO TRADE"
 
-if cmd:
-    if cmd == "/startbot":
-        st.session_state.bot_active = True
-        send_telegram("🟢 Bot ACTIVADO")
+if prediction == 1:
+    signal = "BUY"
+elif prediction == 0:
+    signal = "SELL"
 
-    elif cmd == "/stopbot":
-        st.session_state.bot_active = False
-        send_telegram("🔴 Bot PARADO")
+# --- DATOS ---
+price = float(last["Close"])
 
-    elif cmd == "/balance":
-        send_telegram(f"💰 Balance: {round(st.session_state.balance,2)}€")
+# SL / TP
+atr = float(last["ATR"])
 
-    elif cmd == "/status":
-        estado = "ACTIVO" if st.session_state.bot_active else "PARADO"
-        send_telegram(f"🤖 Estado: {estado}")
+if signal == "BUY":
+    sl = price - atr * 2
+    tp = price + atr * 3
+elif signal == "SELL":
+    sl = price + atr * 2
+    tp = price - atr * 3
+else:
+    sl, tp = None, None
 
-# =========================
-# MERCADO
-# =========================
-symbol = st.selectbox("Mercado", ["GC=F", "^IXIC", "^GSPC"])
+# --- UI ---
+st.subheader("📍 Señal IA")
 
-# =========================
-# DATA
-# =========================
-@st.cache_data(ttl=60)
-def get_data():
-    df = yf.download(symbol, period="1d", interval="1m")
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    return df.dropna()
+if signal == "BUY":
+    st.success("🟢 IA: COMPRA")
+elif signal == "SELL":
+    st.error("🔴 IA: VENTA")
+else:
+    st.warning("⚪ IA: NO OPERAR")
 
-df = get_data()
+st.write(f"Precio: {price}")
+st.write(f"Stop Loss: {sl}")
+st.write(f"Take Profit: {tp}")
 
-# =========================
-# INDICADORES
-# =========================
-df["ema_fast"] = df["Close"].ewm(span=20).mean()
-df["ema_slow"] = df["Close"].ewm(span=50).mean()
-
-df["rsi"] = 100 - (100 / (1 + df["Close"].pct_change().rolling(14).mean() /
-                         df["Close"].pct_change().rolling(14).std()))
-
-df["atr"] = (df["High"] - df["Low"]).rolling(14).mean()
-
-df = df.dropna()
-
-# =========================
-# BOT AGRESIVO
-# =========================
-risk_per_trade = 0.03   # 🔥 3%
-atr_sl = 1.0
-atr_tp = 3.0
-
-last = df.iloc[-1]
-
-if st.session_state.bot_active:
-
-    # 🔒 PROTECCIÓN RACHA NEGATIVA
-    if len(st.session_state.trades) > 3:
-        last_trades = st.session_state.trades[-3:]
-        if sum(last_trades) < 0:
-            st.session_state.bot_active = False
-            send_telegram("🛑 Bot parado por racha negativa")
-
-    # ENTRADAS
-    if st.session_state.position is None:
-
-        if last["ema_fast"] > last["ema_slow"] and last["rsi"] < 30:
-            entry = last["Close"]
-            sl = entry - last["atr"] * atr_sl
-            tp = entry + last["atr"] * atr_tp
-
-            st.session_state.position = ("BUY", entry, sl, tp)
-            send_telegram(f"🟢 BUY {symbol} @ {round(entry,2)}")
-
-        elif last["ema_fast"] < last["ema_slow"] and last["rsi"] > 70:
-            entry = last["Close"]
-            sl = entry + last["atr"] * atr_sl
-            tp = entry - last["atr"] * atr_tp
-
-            st.session_state.position = ("SELL", entry, sl, tp)
-            send_telegram(f"🔴 SELL {symbol} @ {round(entry,2)}")
-
-    # GESTIÓN
-    else:
-        side, entry, sl, tp = st.session_state.position
-        price = last["Close"]
-
-        if side == "BUY":
-            if price <= sl:
-                loss = st.session_state.balance * risk_per_trade
-                st.session_state.balance -= loss
-                st.session_state.trades.append(-loss)
-
-                send_telegram(f"❌ SL: -{round(loss,2)}€")
-                st.session_state.position = None
-
-            elif price >= tp:
-                profit = st.session_state.balance * risk_per_trade * 3
-                st.session_state.balance += profit
-                st.session_state.trades.append(profit)
-
-                send_telegram(f"💰 TP: +{round(profit,2)}€")
-                st.session_state.position = None
-
-        elif side == "SELL":
-            if price >= sl:
-                loss = st.session_state.balance * risk_per_trade
-                st.session_state.balance -= loss
-                st.session_state.trades.append(-loss)
-
-                send_telegram(f"❌ SL: -{round(loss,2)}€")
-                st.session_state.position = None
-
-            elif price <= tp:
-                profit = st.session_state.balance * risk_per_trade * 3
-                st.session_state.balance += profit
-                st.session_state.trades.append(profit)
-
-                send_telegram(f"💰 TP: +{round(profit,2)}€")
-                st.session_state.position = None
-
-# =========================
-# EQUITY
-# =========================
-st.session_state.equity.append(st.session_state.balance)
-
-# =========================
-# UI
-# =========================
-estado = "🟢 ACTIVO" if st.session_state.bot_active else "🔴 PARADO"
-
-st.metric("Estado del bot", estado)
-st.metric("Balance", round(st.session_state.balance, 2))
-
-# PRECIO
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=df.index, y=df["Close"], name="Precio"))
-st.plotly_chart(fig, use_container_width=True)
-
-# EQUITY
-eq_fig = go.Figure()
-eq_fig.add_trace(go.Scatter(y=st.session_state.equity, name="Equity"))
-st.plotly_chart(eq_fig, use_container_width=True)
-
-# =========================
-# ESTADÍSTICAS
-# =========================
-st.subheader("📊 Estadísticas")
-
-trades = st.session_state.trades
-
-if trades:
-    wins = [t for t in trades if t > 0]
-    winrate = len(wins) / len(trades) * 100
-
-    st.write(f"Trades: {len(trades)}")
-    st.write(f"Winrate: {round(winrate,2)}%")
-    st.write(f"Ganancia total: {round(sum(trades),2)}€")
+st.subheader("📊 Gráfico")
+st.line_chart(data[["Close", "EMA20", "EMA50"]])
