@@ -1,55 +1,65 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
+import numpy as np
+
+st.set_page_config(page_title="Bot Trading IA PRO", layout="wide")
 
 st.title("🚀 Bot Trading IA PRO FINAL (XAUUSD)")
 
-# Descargar datos
-data = yf.download("GC=F", period="7d", interval="5m")
+# =========================
+# DESCARGAR DATOS
+# =========================
+data = yf.download("GC=F", period="1d", interval="1m")
 
-# Validar datos
-if data.empty:
-    st.error("❌ No hay datos")
-    st.stop()
+# =========================
+# 🔥 ARREGLAR MULTIINDEX
+# =========================
+if isinstance(data.columns, pd.MultiIndex):
+    data.columns = data.columns.get_level_values(0)
 
-# Ver columnas
-st.write("Columnas:", data.columns)
-
-# Asegurar Close
-if "Close" not in data.columns:
-    if "Adj Close" in data.columns:
-        data["Close"] = data["Adj Close"]
-    else:
-        st.error("❌ No existe Close")
-        st.stop()
-
-# Crear Future
-data["Future"] = data["Close"].shift(-1)
-
-# Eliminar NaN correctamente (SIN subset)
+# =========================
+# LIMPIEZA
+# =========================
 data = data.dropna()
 
-# Crear target
+# =========================
+# CREAR FUTURE (SIN ERRORES)
+# =========================
+data["Future"] = data["Close"].shift(-1)
+
+# IMPORTANTE: quitar NaN después del shift
+data = data.dropna()
+
+# =========================
+# TARGET IA
+# =========================
 data["Target"] = (data["Future"] > data["Close"]).astype(int)
 
-# Features
-X = data[["Close"]]
-y = data["Target"]
+# =========================
+# INDICADORES
+# =========================
+data["SMA20"] = data["Close"].rolling(20).mean()
+data["SMA50"] = data["Close"].rolling(50).mean()
 
-# Modelo
-model = RandomForestClassifier()
-model.fit(X, y)
+# =========================
+# SEÑAL SIMPLE
+# =========================
+last = data.iloc[-1]
 
-# Predicción
-pred = model.predict(X.tail(1))[0]
-
-# Resultado
-if pred == 1:
-    st.success("📈 COMPRA")
+if last["SMA20"] > last["SMA50"]:
+    signal = "🟢 COMPRA"
 else:
-    st.error("📉 VENTA")
+    signal = "🔴 VENTA"
 
-# Mostrar datos
-st.subheader("Últimos datos")
-st.write(data.tail())
+# =========================
+# UI
+# =========================
+st.subheader("📊 Precio actual")
+st.write(last["Close"])
+
+st.subheader("📈 Señal IA")
+st.write(signal)
+
+st.subheader("📋 Datos")
+st.dataframe(data.tail(50))
