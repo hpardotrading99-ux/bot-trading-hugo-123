@@ -8,24 +8,26 @@ st.title("🚀 Bot Trading IA PRO FINAL (XAUUSD)")
 # Descargar datos
 data = yf.download("GC=F", period="7d", interval="5m")
 
-# Verificar si hay datos
+# Validar datos
 if data.empty:
-    st.error("No hay datos disponibles")
+    st.error("❌ No hay datos")
     st.stop()
 
-# Asegurar columna Close
+# Ver columnas
+st.write("Columnas:", data.columns)
+
+# Asegurar Close
 if "Close" not in data.columns:
     if "Adj Close" in data.columns:
         data["Close"] = data["Adj Close"]
     else:
-        st.error("No existe columna Close")
-        st.write(data.columns)
+        st.error("❌ No existe Close")
         st.stop()
 
-# Crear variables
+# Crear Future
 data["Future"] = data["Close"].shift(-1)
 
-# Eliminar NaN
+# Eliminar NaN correctamente (SIN subset)
 data = data.dropna()
 
 # Crear target
@@ -35,7 +37,7 @@ data["Target"] = (data["Future"] > data["Close"]).astype(int)
 X = data[["Close"]]
 y = data["Target"]
 
-# Modelo IA
+# Modelo
 model = RandomForestClassifier()
 model.fit(X, y)
 
@@ -44,10 +46,10 @@ pred = model.predict(X.tail(1))[0]
 
 # Resultado
 if pred == 1:
-    st.success("📈 Señal: COMPRA")
+    st.success("📈 COMPRA")
 else:
-    st.error("📉 Señal: VENTA")
+    st.error("📉 VENTA")
 
 # Mostrar datos
-st.subheader("Datos recientes")
+st.subheader("Últimos datos")
 st.write(data.tail())
