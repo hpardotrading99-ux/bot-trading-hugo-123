@@ -3,86 +3,51 @@ import yfinance as yf
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
-# ==============================
-# CONFIG
-# ==============================
-st.set_page_config(page_title="Bot Trading IA PRO", layout="wide")
-
 st.title("🚀 Bot Trading IA PRO FINAL (XAUUSD)")
 
-# ==============================
-# DATOS
-# ==============================
-@st.cache_data
-def load_data():
-    data = yf.download("GC=F", period="7d", interval="5m")
-    return data
+# Descargar datos
+data = yf.download("GC=F", period="7d", interval="5m")
 
-data = load_data()
+# Verificar si hay datos
+if data.empty:
+    st.error("No hay datos disponibles")
+    st.stop()
 
-# ==============================
-# FEATURE ENGINEERING
-# ==============================
+# Asegurar columna Close
+if "Close" not in data.columns:
+    if "Adj Close" in data.columns:
+        data["Close"] = data["Adj Close"]
+    else:
+        st.error("No existe columna Close")
+        st.write(data.columns)
+        st.stop()
 
-# 🎯 FIX DEFINITIVO DEL ERROR
+# Crear variables
 data["Future"] = data["Close"].shift(-1)
 
-# 🔥 CLAVE: limpiar antes de comparar
-data = data.dropna(subset=["Future", "Close"])
-
-data["Target"] = (data["Future"] > data["Close"]).astype(int)
-
-# Indicadores
-data["Return"] = data["Close"].pct_change()
-data["MA5"] = data["Close"].rolling(5).mean()
-data["MA20"] = data["Close"].rolling(20).mean()
-
-# Limpiar NaNs finales
+# Eliminar NaN
 data = data.dropna()
 
-# ==============================
-# MODELO IA
-# ==============================
-features = ["Return", "MA5", "MA20"]
+# Crear target
+data["Target"] = (data["Future"] > data["Close"]).astype(int)
 
-X = data[features]
+# Features
+X = data[["Close"]]
 y = data["Target"]
 
-model = RandomForestClassifier(n_estimators=100)
+# Modelo IA
+model = RandomForestClassifier()
 model.fit(X, y)
 
-# ==============================
-# PREDICCIÓN
-# ==============================
-last_data = X.iloc[-1:]
-prediction = model.predict(last_data)[0]
+# Predicción
+pred = model.predict(X.tail(1))[0]
 
-# ==============================
-# INTERFAZ
-# ==============================
-col1, col2 = st.columns(2)
+# Resultado
+if pred == 1:
+    st.success("📈 Señal: COMPRA")
+else:
+    st.error("📉 Señal: VENTA")
 
-with col1:
-    st.subheader("📊 Precio actual")
-    st.metric("XAUUSD", round(data["Close"].iloc[-1], 2))
-
-with col2:
-    st.subheader("🤖 Señal IA")
-
-    if prediction == 1:
-        st.success("📈 COMPRAR (BUY)")
-    else:
-        st.error("📉 VENDER (SELL)")
-
-# ==============================
-# GRÁFICO
-# ==============================
-st.subheader("📉 Gráfico")
-
-st.line_chart(data["Close"])
-
-# ==============================
-# DEBUG (opcional)
-# ==============================
-with st.expander("🔍 Ver datos"):
-    st.write(data.tail())
+# Mostrar datos
+st.subheader("Datos recientes")
+st.write(data.tail())
